@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+@theme {
+  /* Toile neutre chaude, pas de blanc pur ni de dégradé décoratif */
+  --color-paper: #f5f4f0;
+  --color-paper-dim: #edece5;
+  --color-ink: #14171d;
+  --color-ink-soft: #5e6470;
+  --color-line: #dad7cd;
+
+  /* Accent unique : le jaune MTN, réservé à l'action et aux états actifs */
+  --color-yellow: #ffcc00;
+  --color-yellow-ink: #14171d;
+
+  /* Bleu MTN pour la structure : rail, texte de marque, icônes */
+  --color-blue: #002d72;
+  --color-blue-dim: #eef2f8;
+
+  --color-danger: #b3392a;
+  --color-success: #1e7a45;
+
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Space Grotesk", "Inter", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+.font-mono {
+  font-family: var(--font-mono);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

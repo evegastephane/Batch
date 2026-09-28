@@ -1,0 +1,4 @@
+[build]
+# Dossier target séparé pour éviter les conflits avec rust-analyzer (VS Code)
+# rust-analyzer utilise target/debug, ce dossier est uniquement pour les builds release/CLI
+target-dir = "C:/cargo-build/mmc-batch-backend"

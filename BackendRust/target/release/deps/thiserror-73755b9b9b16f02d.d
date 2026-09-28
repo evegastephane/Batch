@@ -1,0 +1,14 @@
+C:\Users\aloys\Desktop\MMC\MMC-Batch\BackendRust\target\release\deps\thiserror-73755b9b9b16f02d.d: C:\Users\aloys\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.20\src\lib.rs C:\Users\aloys\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.20\src\aserror.rs C:\Users\aloys\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.20\src\display.rs C:\Users\aloys\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.20\src\var.rs C:\Users\aloys\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.20\src\private.rs C:\Users\aloys\Desktop\MMC\MMC-Batch\BackendRust\target\release\build\thiserror-42875c963e79a80d\out/private.rs
+
+C:\Users\aloys\Desktop\MMC\MMC-Batch\BackendRust\target\release\deps\libthiserror-73755b9b9b16f02d.rlib: C:\Users\aloys\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.20\src\lib.rs C:\Users\aloys\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.20\src\aserror.rs C:\Users\aloys\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.20\src\display.rs C:\Users\aloys\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.20\src\var.rs C:\Users\aloys\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.20\src\private.rs C:\Users\aloys\Desktop\MMC\MMC-Batch\BackendRust\target\release\build\thiserror-42875c963e79a80d\out/private.rs
+
+C:\Users\aloys\Desktop\MMC\MMC-Batch\BackendRust\target\release\deps\libthiserror-73755b9b9b16f02d.rmeta: C:\Users\aloys\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.20\src\lib.rs C:\Users\aloys\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.20\src\aserror.rs C:\Users\aloys\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.20\src\display.rs C:\Users\aloys\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.20\src\var.rs C:\Users\aloys\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.20\src\private.rs C:\Users\aloys\Desktop\MMC\MMC-Batch\BackendRust\target\release\build\thiserror-42875c963e79a80d\out/private.rs
+
+C:\Users\aloys\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.20\src\lib.rs:
+C:\Users\aloys\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.20\src\aserror.rs:
+C:\Users\aloys\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.20\src\display.rs:
+C:\Users\aloys\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.20\src\var.rs:
+C:\Users\aloys\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.20\src\private.rs:
+C:\Users\aloys\Desktop\MMC\MMC-Batch\BackendRust\target\release\build\thiserror-42875c963e79a80d\out/private.rs:
+
+# env-dep:OUT_DIR=C:\\Users\\aloys\\Desktop\\MMC\\MMC-Batch\\BackendRust\\target\\release\\build\\thiserror-42875c963e79a80d\\out

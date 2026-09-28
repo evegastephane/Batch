@@ -1,0 +1,7 @@
+# Tauri build outputs
+/target/
+/binaries/
+
+# Icônes temporaires
+app-icon.png
+app-icon-real.png
