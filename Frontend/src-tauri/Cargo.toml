@@ -13,9 +13,10 @@ path = "src/main.rs"
 
 [dependencies]
 tauri = { version = "2", features = [] }
-tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Conversion Excel -> CSV/TXT, partagee avec le serveur HTTP de BackendRust
+mmc-batch-backend = { path = "../../BackendRust", default-features = false }
 
 [profile.release]
 panic = "abort"
