@@ -1,6 +1,5 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { invoke, isTauri } from '@tauri-apps/api/core'
 import {
   FileSpreadsheet,
   UploadCloud,
@@ -18,121 +17,106 @@ import {
 import EnTete from './components/EnTete.vue'
 import BarreLaterale from './components/BarreLaterale.vue'
 import NotificationToast from './components/NotificationToast.vue'
+import { convertir, listerHistorique, lireZipHistorique, supprimerHistorique } from './api'
 
-// Dans l'appli Tauri, le port est choisi au lancement du backend (8000 s'il est libre).
-let API_BASE = 'http://127.0.0.1:8000'
-
-async function lireEtatBackend() {
-  if (!isTauri()) return null
-  try {
-    return await invoke('etat_backend')
-  } catch {
-    return null
-  }
-}
-
-// Attend que le backend lancé par Tauri soit prêt (au plus ~10 s).
-async function attendreBackend() {
-  for (let essai = 0; essai < 40; essai++) {
-    const etatBackend = await lireEtatBackend()
-    if (!etatBackend) return
-    if (etatBackend.port) API_BASE = `http://127.0.0.1:${etatBackend.port}`
-    if (etatBackend.pret || etatBackend.erreur || etatBackend.code_sortie !== null) return
-    await new Promise((r) => setTimeout(r, 250))
-  }
-}
-
-// Explique pourquoi le backend ne répond pas, à partir de ce que Tauri a observé.
-async function diagnosticBackend() {
-  const etatBackend = await lireEtatBackend()
-  if (!etatBackend) return ''
-
-  const dernieresLignes = (etatBackend.journal || []).slice(-4).join('\n')
-  let cause
-  if (etatBackend.erreur) {
-    cause = `Le backend n'a pas pu être lancé : ${etatBackend.erreur}`
-  } else if (!etatBackend.en_marche) {
-    cause = `Le backend s'est arrêté (code ${etatBackend.code_sortie ?? '?'}).`
-  } else {
-    cause = `Le backend est lancé sur le port ${etatBackend.port} mais ne répond pas.`
-  }
-  return [
-    cause,
-    dernieresLignes && `Derniers messages :\n${dernieresLignes}`,
-    etatBackend.fichier_journal && `Journal complet : ${etatBackend.fichier_journal}`
-  ].filter(Boolean).join('\n\n')
-}
-
-const sidebarOuvert = ref(false)
-const historique = ref([])
-const chargementHistorique = ref(false)
-
-const etat = ref('repos') // repos | survol | conversion | termine | erreur
-const fichier = ref(null)
-const styleEntete = ref('Init')
-const modeConversion = ref('standard') // standard | crplmt
-const montant = ref('100000')
-const titreAlias = ref('Add Alias Title')
-const descriptionAlias = ref('Agent  advance pilote')
-const nomZip = ref('')
-const tailleZipKo = ref(0)
-const nbFeuilles = ref(0)
-const messageErreur = ref('')
-const urlTelechargement = ref(null)
-const inputFichier = ref(null)
-const progression = ref(0)
-const statutProgression = ref('')
-
-const options = [
-  { valeur: 'Init', label: 'Init', description: 'Initiation', icone: AlignLeft },
-  { valeur: 'Set', label: 'Set', description: 'Modification', icone: Rows3 },
-]
+// --- Options de conversion ---------------------------------------------------
 
 const modes = [
   {
     valeur: 'standard',
     label: 'Standard',
     description: 'Classeur déjà au format MSISDN,…,Paramètre',
-    icone: Table2,
-    route: '/convert'
+    icone: Table2
   },
   {
     valeur: 'crplmt',
     label: 'CRPLMT',
     description: 'Colonne de numéros → fichier AddAlias .txt (MSISDN,"numéro","CRPLMT_numéro@montant")',
-    icone: Phone,
-    route: '/convert/crplmt'
-  },
+    icone: Phone
+  }
 ]
+
+const options = [
+  { valeur: 'Init', label: 'Init', description: 'Initiation', icone: AlignLeft },
+  { valeur: 'Set', label: 'Set', description: 'Modification', icone: Rows3 }
+]
+
+const modeConversion = ref('standard') // standard | crplmt
+const styleEntete = ref('Init')
+const montant = ref('100000')
+const titreAlias = ref('Add Alias Title')
+const descriptionAlias = ref('Agent  advance pilote')
 
 const montantValide = computed(() => /^\d+$/.test(montant.value.trim()))
 
+// --- État de l'écran -----------------------------------------------------------
+
+const etat = ref('repos') // repos | survol | conversion | termine | erreur
+const fichier = ref(null)
+const inputFichier = ref(null)
+const nomZip = ref('')
+const tailleZipKo = ref(0)
+const nbFeuilles = ref(0)
+const messageErreur = ref('')
+const urlTelechargement = ref(null)
+const progression = ref(0)
+const statutProgression = ref('')
+
 const formatKo = (octets) => (octets / 1024).toFixed(0)
 const pourcentageRestant = computed(() => Math.max(0, 100 - progression.value))
+const libelleZone = computed(() =>
+  etat.value === 'survol' ? 'Relâche pour déposer' : 'Glisse ton fichier ici, ou clique pour parcourir'
+)
+
+// --- Historique ------------------------------------------------------------------
+
+const sidebarOuvert = ref(false)
+const historique = ref([])
+const chargementHistorique = ref(false)
 
 async function chargerHistorique() {
   chargementHistorique.value = true
   try {
-    const reponse = await fetch(`${API_BASE}/historique`)
-    if (reponse.ok) historique.value = await reponse.json()
+    historique.value = await listerHistorique()
   } catch {
-    // silencieux : le backend n'est peut-être pas encore lancé
+    // l'historique est secondaire : la conversion reste possible
   } finally {
     chargementHistorique.value = false
   }
 }
+
+async function telechargerDepuisHistorique(entree) {
+  try {
+    enregistrerFichier(await lireZipHistorique(entree.id), entree.nom_zip)
+    afficherNotification(entree.nom_zip, 'Téléchargement depuis l\'historique lancé.')
+  } catch (erreur) {
+    afficherNotification(entree.nom_zip, erreur.message)
+  }
+}
+
+async function supprimerDeHistorique(entree) {
+  historique.value = historique.value.filter((e) => e.id !== entree.id)
+  try {
+    await supprimerHistorique(entree.id)
+  } catch {
+    chargerHistorique()
+  }
+}
+
+onMounted(chargerHistorique)
+
+// --- Notification ------------------------------------------------------------------
 
 const notificationVisible = ref(false)
 const notificationFichier = ref('')
 const notificationMessage = ref('')
 let timerNotification = null
 
-function afficherNotification(nomFichier, message = 'Le fichier a été envoyé vers vos téléchargements.') {
+function afficherNotification(nomFichier, message) {
   notificationFichier.value = nomFichier
   notificationMessage.value = message
   notificationVisible.value = true
-
-  if (timerNotification) clearTimeout(timerNotification)
+  clearTimeout(timerNotification)
   timerNotification = setTimeout(() => {
     notificationVisible.value = false
   }, 4000)
@@ -140,30 +124,10 @@ function afficherNotification(nomFichier, message = 'Le fichier a été envoyé 
 
 function fermerNotification() {
   notificationVisible.value = false
-  if (timerNotification) clearTimeout(timerNotification)
+  clearTimeout(timerNotification)
 }
 
-function telechargerDepuisHistorique(entree) {
-  const a = document.createElement('a')
-  a.href = `${API_BASE}/historique/${entree.id}/telecharger`
-  a.download = entree.nom_zip
-  a.click()
-  afficherNotification(entree.nom_zip, 'Téléchargement depuis l\'historique lancé.')
-}
-
-async function supprimerDeHistorique(entree) {
-  historique.value = historique.value.filter((e) => e.id !== entree.id)
-  try {
-    await fetch(`${API_BASE}/historique/${entree.id}`, { method: 'DELETE' })
-  } catch {
-    chargerHistorique()
-  }
-}
-
-onMounted(async () => {
-  await attendreBackend()
-  chargerHistorique()
-})
+// --- Sélection du fichier -----------------------------------------------------------
 
 function ouvrirSelecteur() {
   inputFichier.value?.click()
@@ -181,8 +145,9 @@ function onSurvolSortie(e) {
 
 function onDepot(e) {
   e.preventDefault()
-  const f = e.dataTransfer.files?.[0]
+  const f = e.dataTransfer?.files?.[0]
   if (f) traiterFichier(f)
+  else if (etat.value === 'survol') etat.value = 'repos'
 }
 
 function onSelection(e) {
@@ -190,168 +155,92 @@ function onSelection(e) {
   if (f) traiterFichier(f)
 }
 
-async function traiterFichier(f) {
-  const extensionValide = /\.(xlsx|xls)$/i.test(f.name)
-  if (!extensionValide) {
-    etat.value = 'erreur'
-    messageErreur.value = 'Format non pris en charge. Dépose un fichier .xlsx ou .xls.'
-    return
-  }
+// --- Conversion ------------------------------------------------------------------------
 
+function afficherErreur(message) {
+  messageErreur.value = message
+  etat.value = 'erreur'
+}
+
+async function traiterFichier(f) {
+  if (!/\.(xlsx|xls)$/i.test(f.name)) {
+    return afficherErreur('Format non pris en charge. Dépose un fichier .xlsx ou .xls.')
+  }
   if (modeConversion.value === 'crplmt' && !montantValide.value) {
-    etat.value = 'erreur'
-    messageErreur.value = 'Le montant doit être un nombre entier (ex. 100000).'
-    return
+    return afficherErreur('Le montant doit être un nombre entier (ex. 100000).')
   }
 
   fichier.value = f
   etat.value = 'conversion'
-  progression.value = 0
-  statutProgression.value = 'Préparation'
+  const arreterProgression = demarrerProgression()
 
   try {
-    const formData = new FormData()
-    formData.append('fichier', f)
-    formData.append('style_entete', styleEntete.value)
-    if (modeConversion.value === 'crplmt') {
-      formData.append('montant', montant.value.trim())
-      formData.append('titre', titreAlias.value)
-      formData.append('description', descriptionAlias.value)
-    }
+    const resultat = await convertir({
+      fichier: f,
+      mode: modeConversion.value,
+      styleEntete: styleEntete.value,
+      montant: montant.value.trim(),
+      titre: titreAlias.value,
+      description: descriptionAlias.value
+    })
+    await arreterProgression(true)
 
-    const reponse = await convertirAvecProgression(formData)
-    const enteteContenu = reponse.headers['content-disposition'] || ''
-    const correspondance = enteteContenu.match(/filename=([^;]+)/)
-    nomZip.value = correspondance ? correspondance[1].trim() : 'export_csv.zip'
-    nbFeuilles.value = Number(reponse.headers['x-nb-feuilles']) || 0
-
-    const blob = reponse.blob
-    tailleZipKo.value = blob.size
-    urlTelechargement.value = URL.createObjectURL(blob)
-
-    // Court délai pour apprécier l'atteinte des 100%
-    await new Promise((r) => setTimeout(r, 350))
-
+    nomZip.value = resultat.nomZip
+    nbFeuilles.value = resultat.nbFeuilles
+    tailleZipKo.value = resultat.blob.size
+    urlTelechargement.value = URL.createObjectURL(resultat.blob)
     etat.value = 'termine'
     chargerHistorique()
-  } catch (err) {
-    messageErreur.value = err.message || 'La conversion a échoué. Réessaie.'
-    etat.value = 'erreur'
+  } catch (erreur) {
+    await arreterProgression(false)
+    afficherErreur(erreur.message || 'La conversion a échoué. Réessaie.')
   }
 }
 
-function convertirAvecProgression(formData) {
-  return new Promise((resolve, reject) => {
-    const requete = new XMLHttpRequest()
-    const route = modes.find((m) => m.valeur === modeConversion.value)?.route || '/convert'
-    requete.open('POST', `${API_BASE}${route}`)
-    requete.responseType = 'blob'
+// Barre de progression indicative pendant la conversion (qui ne donne pas
+// d'avancement réel) ; complétée jusqu'à 100 % quand le résultat arrive.
+function demarrerProgression() {
+  progression.value = 1
+  statutProgression.value = 'Lecture du fichier'
 
-    let timerProgression = null
-    let termine = false
-
-    progression.value = 1
-    statutProgression.value = 'Lecture du fichier'
-
-    // Avancement régulier et continu, 1% par 1%
-    timerProgression = setInterval(() => {
-      if (termine) return
-
-      if (progression.value < 25) {
-        progression.value += 1
-        statutProgression.value = 'Lecture du fichier'
-      } else if (progression.value < 55) {
-        progression.value += 1
-        statutProgression.value = 'Analyse des données'
-      } else if (progression.value < 85) {
-        progression.value += 1
-        statutProgression.value = 'Conversion des feuilles'
-      } else if (progression.value < 96) {
-        // Défilement doux en attendant la fin de la compression
-        if (Math.random() > 0.35) {
-          progression.value += 1
-        }
-        statutProgression.value = 'Compression du zip'
-      }
-    }, 45)
-
-    const finaliserProgression = async () => {
-      termine = true
-      clearInterval(timerProgression)
-
-      statutProgression.value = 'Finalisation'
-      while (progression.value < 100) {
-        progression.value = Math.min(100, progression.value + 1)
-        await new Promise((r) => setTimeout(r, 20))
-      }
-      statutProgression.value = 'Terminé'
+  const timer = setInterval(() => {
+    if (progression.value < 25) {
+      progression.value += 1
+      statutProgression.value = 'Lecture du fichier'
+    } else if (progression.value < 55) {
+      progression.value += 1
+      statutProgression.value = 'Analyse des données'
+    } else if (progression.value < 85) {
+      progression.value += 1
+      statutProgression.value = 'Conversion des feuilles'
+    } else if (progression.value < 96) {
+      if (Math.random() > 0.35) progression.value += 1
+      statutProgression.value = 'Compression du zip'
     }
+  }, 45)
 
-    requete.onload = async () => {
-      const headers = parserEntetes(requete.getAllResponseHeaders())
-
-      if (requete.status < 200 || requete.status >= 300) {
-        termine = true
-        clearInterval(timerProgression)
-        if (requete.status === 404) {
-          reject(new Error(
-            'Le backend lancé est une ancienne version (route inconnue). ' +
-            'Ferme l\'application, relance .\\copy-sidecar.ps1 puis redémarre.'
-          ))
-          return
-        }
-        const detail = await lireErreurBlob(requete.response)
-        reject(new Error(detail || `Erreur serveur (${requete.status})`))
-        return
-      }
-
-      await finaliserProgression()
-      resolve({ blob: requete.response, headers })
+  return async (reussi) => {
+    clearInterval(timer)
+    if (!reussi) return
+    statutProgression.value = 'Finalisation'
+    while (progression.value < 100) {
+      progression.value += 1
+      await new Promise((r) => setTimeout(r, 20))
     }
-
-    requete.onerror = async () => {
-      termine = true
-      clearInterval(timerProgression)
-      const diagnostic = await diagnosticBackend()
-      reject(new Error(
-        `Impossible de joindre le backend (${API_BASE}).` +
-        (diagnostic ? `\n\n${diagnostic}` : ' Ferme complètement l\'application puis relance-la.')
-      ))
-    }
-
-    requete.onabort = () => {
-      termine = true
-      clearInterval(timerProgression)
-      reject(new Error('Conversion annulée.'))
-    }
-
-    requete.send(formData)
-  })
-}
-
-function parserEntetes(entetesBrutes) {
-  return entetesBrutes
-    .trim()
-    .split(/[\r\n]+/)
-    .filter(Boolean)
-    .reduce((acc, ligne) => {
-      const index = ligne.indexOf(':')
-      if (index === -1) return acc
-      acc[ligne.slice(0, index).trim().toLowerCase()] = ligne.slice(index + 1).trim()
-      return acc
-    }, {})
-}
-
-async function lireErreurBlob(blob) {
-  if (!blob) return ''
-
-  try {
-    const texte = await blob.text()
-    const json = JSON.parse(texte)
-    return json?.detail || texte
-  } catch {
-    return ''
+    statutProgression.value = 'Terminé'
+    await new Promise((r) => setTimeout(r, 350))
   }
+}
+
+// --- Téléchargement ---------------------------------------------------------------------
+
+function enregistrerFichier(blob, nom) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = nom
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(url), 60_000)
 }
 
 function telecharger() {
@@ -373,11 +262,6 @@ function reinitialiser() {
   etat.value = 'repos'
   if (inputFichier.value) inputFichier.value.value = ''
 }
-
-const libelleZone = computed(() => {
-  if (etat.value === 'survol') return 'Relâche pour déposer'
-  return 'Glisse ton fichier ici, ou clique pour parcourir'
-})
 </script>
 
 <template>

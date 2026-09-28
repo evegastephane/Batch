@@ -2,17 +2,10 @@
   "$schema": "https://schema.tauri.app/config/2",
   "identifier": "default",
   "description": "Default permissions for MMC Batch",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
-    "core:default",
-    {
-      "identifier": "shell:allow-execute",
-      "allow": [
-        {
-          "name": "binaries/mmc-batch-backend",
-          "sidecar": true
-        }
-      ]
-    }
+    "core:default"
   ]
 }

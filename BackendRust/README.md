@@ -1,34 +1,29 @@
-# Backend Rust MMC Batch
+# BackendRust — bibliothèque `mmc_batch_core`
 
-Backend compatible avec le frontend existant. Il remplace l'API FastAPI en exposant les memes routes sur `127.0.0.1:8000`.
+Conversion des classeurs Excel et historique, utilisée directement par l'appli Tauri
+(`Frontend/src-tauri`). Point d'entrée : `mmc_batch_core::convertir(&historique, demande)`.
 
-## Lancer
+## Serveur HTTP optionnel
+
+Pour utiliser l'interface dans un navigateur (`npm run dev`), sans Tauri :
 
 ```powershell
 cd BackendRust
 cargo run
 ```
 
-Routes principales :
+Routes :
 
-- `POST /convert` avec `multipart/form-data` : champs `fichier` et `style_entete`.
-- `POST /convert/crplmt` avec `multipart/form-data` : champs `fichier`, `montant` (defaut `100000`),
-  `titre` (defaut `Add Alias Title`) et `description` (defaut `Agent  advance pilote`).
-  Le fichier Excel contient une seule colonne (un titre puis un numero par ligne). Sortie : un zip avec
-  `<nom>.txt` (CRLF, sans BOM) :
-  `HDR,"AddAlias","Add Alias Title","ExtId12340","<nb>","Agent  advance pilote","1"` puis une ligne
-  `MSISDN,"237653282055","CRPLMT_237653282055@100000"` par numero.
-- `GET /historique`
-- `GET /historique/{id}/telecharger`
-- `DELETE /historique/{id}`
+- `POST /convert` (`multipart/form-data`) : `fichier`, `style_entete` (`Init` ou `Set`).
+- `POST /convert/crplmt` : `fichier`, `montant` (défaut `100000`), `titre` (défaut `Add Alias Title`),
+  `description` (défaut `Agent  advance pilote`).
+- `GET /historique`, `GET /historique/{id}/telecharger`, `DELETE /historique/{id}`
 
-Par defaut, les zips et la base SQLite sont crees a cote du binaire s'il est accessible en ecriture,
-sinon dans `%LOCALAPPDATA%\MMC Batch`. Dans l'appli Tauri, ils sont dans `%APPDATA%\com.mmc.batch`
-(avec `backend.log`), et le port est 8000 s'il est libre, sinon un port libre. Variables disponibles :
+Données à côté du binaire s'il est accessible en écriture, sinon dans `%LOCALAPPDATA%\MMC Batch`.
+Variables : `MMC_STORAGE_DIR`, `MMC_DB_PATH`, `MMC_PORT` (défaut `8000`).
+
+## Tests
 
 ```powershell
-$env:MMC_STORAGE_DIR = "C:\chemin\stockage"
-$env:MMC_DB_PATH = "C:\chemin\historique.db"
-$env:MMC_PORT = "8000"
-cargo run
+cargo test
 ```
