@@ -12,6 +12,10 @@ cargo run
 Routes principales :
 
 - `POST /convert` avec `multipart/form-data` : champs `fichier` et `style_entete`.
+- `POST /convert/crplmt` avec `multipart/form-data` : champs `fichier`, `style_entete` et `montant` (defaut `100000`).
+  Le fichier contient une seule colonne (un titre puis un numero par ligne). Chaque numero devient
+  `MSISDN,"237653282055","CRPLMT_237653282055@100000"`, puis le process habituel ajoute l'entete HDR
+  avec le parametre `CRPLMT`. Le zip contient `<feuille>.csv` (final) et `<feuille>_intermediaire.csv`.
 - `GET /historique`
 - `GET /historique/{id}/telecharger`
 - `DELETE /historique/{id}`

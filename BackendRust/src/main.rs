@@ -81,6 +81,7 @@ async fn main() -> Result<()> {
     let app = Router::new()
         .route("/", get(root))
         .route("/convert", post(convert))
+        .route("/convert/crplmt", post(convert_crplmt))
         .route("/historique", get(history))
         .route("/historique/:id/telecharger", get(download_history_entry))
         .route("/historique/:id", delete(delete_history_entry))
@@ -102,13 +103,18 @@ async fn root() -> Json<serde_json::Value> {
     }))
 }
 
-async fn convert(
-    State(state): State<Arc<AppState>>,
-    mut multipart: Multipart,
-) -> Result<Response, AppError> {
+struct ConvertForm {
+    file_name: String,
+    bytes: Vec<u8>,
+    style_entete: String,
+    montant: Option<String>,
+}
+
+async fn read_convert_form(mut multipart: Multipart) -> Result<ConvertForm, AppError> {
     let mut file_name: Option<String> = None;
     let mut file_bytes: Option<Vec<u8>> = None;
     let mut style_entete = String::from("Init");
+    let mut montant: Option<String> = None;
 
     while let Some(field) = multipart.next_field().await? {
         let name = field.name().unwrap_or("").to_string();
@@ -119,6 +125,9 @@ async fn convert(
             }
             "style_entete" => {
                 style_entete = field.text().await.unwrap_or_else(|_| String::from("Init"));
+            }
+            "montant" => {
+                montant = field.text().await.ok();
             }
             _ => {}
         }
@@ -137,10 +146,66 @@ async fn convert(
         ));
     }
 
-    let csvs = excel_to_csvs(&bytes, &style_entete)
+    Ok(ConvertForm {
+        file_name,
+        bytes,
+        style_entete,
+        montant,
+    })
+}
+
+async fn convert(
+    State(state): State<Arc<AppState>>,
+    multipart: Multipart,
+) -> Result<Response, AppError> {
+    let form = read_convert_form(multipart).await?;
+
+    let csvs = excel_to_csvs(&form.bytes, &form.style_entete)
         .map_err(|e| AppError::bad_request(format!("Fichier Excel illisible: {e}")))?;
-    let zip_bytes = build_zip(&csvs)?;
-    let zip_name = format!("{}_csv.zip", strip_extension(&file_name));
+    let zip_name = format!("{}_csv.zip", strip_extension(&form.file_name));
+    let nb_feuilles = csvs.len();
+
+    zip_and_respond(&state, &form, &csvs, zip_name, nb_feuilles).await
+}
+
+/// Nouveau chemin : une colonne de MSISDN (avec un titre) devient d'abord
+/// `MSISDN,"<numero>","CRPLMT_<numero>@<montant>"`, puis passe dans le
+/// process habituel (entete HDR Init/Set) avec le parametre CRPLMT.
+async fn convert_crplmt(
+    State(state): State<Arc<AppState>>,
+    multipart: Multipart,
+) -> Result<Response, AppError> {
+    let form = read_convert_form(multipart).await?;
+
+    let montant = form
+        .montant
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or(CRPLMT_MONTANT_DEFAUT)
+        .to_string();
+    if montant.is_empty() || !montant.chars().all(|c| c.is_ascii_digit()) {
+        return Err(AppError::bad_request(
+            "Le montant doit etre un nombre entier (ex. 100000).",
+        ));
+    }
+
+    let files = excel_to_crplmt_csvs(&form.bytes, &form.style_entete, &montant)
+        .map_err(|e| AppError::bad_request(format!("Fichier Excel invalide: {e}")))?;
+    let zip_name = format!("{}_crplmt_csv.zip", strip_extension(&form.file_name));
+    // Chaque feuille produit un fichier final + un fichier intermediaire.
+    let nb_feuilles = files.len() / 2;
+
+    zip_and_respond(&state, &form, &files, zip_name, nb_feuilles).await
+}
+
+async fn zip_and_respond(
+    state: &AppState,
+    form: &ConvertForm,
+    files: &[(String, Vec<u8>)],
+    zip_name: String,
+    nb_feuilles: usize,
+) -> Result<Response, AppError> {
+    let zip_bytes = build_zip(files)?;
 
     let disk_name = format!("{}.zip", Uuid::new_v4().simple());
     let disk_path = state.storage_dir.join(disk_name);
@@ -148,12 +213,12 @@ async fn convert(
 
     let history_id = insert_history(
         &state.db_path,
-        &file_name,
+        &form.file_name,
         &zip_name,
         &disk_path.to_string_lossy(),
-        csvs.len() as i64,
+        nb_feuilles as i64,
         zip_bytes.len() as i64,
-        &style_entete,
+        &form.style_entete,
     )?;
 
     let mut headers = HeaderMap::new();
@@ -167,7 +232,7 @@ async fn convert(
     );
     headers.insert(
         "X-Nb-Feuilles",
-        HeaderValue::from_str(&csvs.len().to_string())?,
+        HeaderValue::from_str(&nb_feuilles.to_string())?,
     );
     headers.insert(
         "X-Historique-Id",
@@ -222,7 +287,10 @@ async fn delete_history_entry(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
-fn excel_to_csvs(bytes: &[u8], style_entete: &str) -> Result<Vec<(String, Vec<u8>)>> {
+const CRPLMT_PARAMETRE: &str = "CRPLMT";
+const CRPLMT_MONTANT_DEFAUT: &str = "100000";
+
+fn read_sheets(bytes: &[u8]) -> Result<Vec<(String, Vec<Vec<String>>)>> {
     let cursor = Cursor::new(bytes.to_vec());
     let mut workbook = open_workbook_auto_from_rs(cursor)?;
     let sheet_names = workbook.sheet_names().to_owned();
@@ -231,8 +299,7 @@ fn excel_to_csvs(bytes: &[u8], style_entete: &str) -> Result<Vec<(String, Vec<u8
         return Err(anyhow!("Aucune feuille trouvee dans le fichier."));
     }
 
-    let mut result = Vec::new();
-
+    let mut sheets = Vec::new();
     for sheet_name in sheet_names {
         let range = workbook.worksheet_range(&sheet_name)?;
         let rows: Vec<Vec<String>> = range
@@ -240,25 +307,112 @@ fn excel_to_csvs(bytes: &[u8], style_entete: &str) -> Result<Vec<(String, Vec<u8
             .map(|row| row.iter().map(clean_cell).collect::<Vec<_>>())
             .filter(|row| row.iter().any(|value| !value.trim().is_empty()))
             .collect();
+        sheets.push((sheet_name, rows));
+    }
 
+    Ok(sheets)
+}
+
+fn excel_to_csvs(bytes: &[u8], style_entete: &str) -> Result<Vec<(String, Vec<u8>)>> {
+    let mut result = Vec::new();
+
+    for (sheet_name, rows) in read_sheets(bytes)? {
         let parameter_name = find_most_frequent_parameter(&rows).unwrap_or_else(|| sheet_name.clone());
-
-        let mut csv = String::new();
-        csv.push_str(&generate_hdr(rows.len(), style_entete, &parameter_name));
-        csv.push('\n');
-
-        for row in rows {
-            csv.push_str(&row.join(","));
-            csv.push('\n');
-        }
-
-        let name = format!("{}.csv", sheet_name.replace(['/', '\\'], "-"));
-        let mut with_bom = vec![0xEF, 0xBB, 0xBF];
-        with_bom.extend_from_slice(csv.as_bytes());
-        result.push((name, with_bom));
+        let lines: Vec<String> = rows.iter().map(|row| row.join(",")).collect();
+        let csv = build_csv(&lines, style_entete, &parameter_name);
+        result.push((csv_file_name(&sheet_name, ""), with_bom(&csv)));
     }
 
     Ok(result)
+}
+
+/// Pour chaque feuille, renvoie le CSV final (entete HDR + lignes CRPLMT)
+/// suivi du CSV intermediaire (lignes CRPLMT seules).
+fn excel_to_crplmt_csvs(
+    bytes: &[u8],
+    style_entete: &str,
+    montant: &str,
+) -> Result<Vec<(String, Vec<u8>)>> {
+    let mut result = Vec::new();
+
+    for (sheet_name, rows) in read_sheets(bytes)? {
+        let msisdns = extract_msisdns(&rows)
+            .map_err(|e| anyhow!("feuille \"{sheet_name}\" : {e}"))?;
+        if msisdns.is_empty() {
+            continue;
+        }
+
+        let lines: Vec<String> = msisdns
+            .iter()
+            .map(|msisdn| crplmt_line(msisdn, montant))
+            .collect();
+
+        let mut intermediate = lines.join("\n");
+        intermediate.push('\n');
+        let csv = build_csv(&lines, style_entete, CRPLMT_PARAMETRE);
+
+        result.push((csv_file_name(&sheet_name, ""), with_bom(&csv)));
+        result.push((csv_file_name(&sheet_name, "_intermediaire"), with_bom(&intermediate)));
+    }
+
+    if result.is_empty() {
+        return Err(anyhow!("Aucun numero trouve dans le fichier."));
+    }
+
+    Ok(result)
+}
+
+/// Lit la premiere cellule non vide de chaque ligne. Une premiere ligne
+/// non numerique est consideree comme le titre de la colonne et ignoree.
+fn extract_msisdns(rows: &[Vec<String>]) -> Result<Vec<String>> {
+    let mut msisdns = Vec::new();
+
+    for (index, row) in rows.iter().enumerate() {
+        let Some(value) = row.iter().map(|v| v.trim()).find(|v| !v.is_empty()) else {
+            continue;
+        };
+        let value: String = value.chars().filter(|c| !c.is_whitespace()).collect();
+
+        if !value.is_empty() && value.chars().all(|c| c.is_ascii_digit()) {
+            msisdns.push(value);
+        } else if index == 0 {
+            // Titre de la colonne
+        } else {
+            return Err(anyhow!(
+                "valeur \"{value}\" invalide a la ligne {} (un numero est attendu)",
+                index + 1
+            ));
+        }
+    }
+
+    Ok(msisdns)
+}
+
+fn crplmt_line(msisdn: &str, montant: &str) -> String {
+    format!("MSISDN,\"{msisdn}\",\"{CRPLMT_PARAMETRE}_{msisdn}@{montant}\"")
+}
+
+fn build_csv(lines: &[String], style_entete: &str, parameter_name: &str) -> String {
+    let mut csv = String::new();
+    csv.push_str(&generate_hdr(lines.len(), style_entete, parameter_name));
+    csv.push('\n');
+
+    for line in lines {
+        csv.push_str(line);
+        csv.push('\n');
+    }
+
+    csv
+}
+
+fn csv_file_name(sheet_name: &str, suffix: &str) -> String {
+    format!("{}{suffix}.csv", sheet_name.replace(['/', '\\'], "-"))
+}
+
+fn with_bom(csv: &str) -> Vec<u8> {
+    let mut bytes = vec![0xEF, 0xBB, 0xBF];
+    bytes.extend_from_slice(csv.as_bytes());
+    bytes
 }
 
 fn clean_cell(cell: &Data) -> String {
@@ -550,6 +704,49 @@ mod tests {
         assert_eq!(
             hdr,
             "HDR,\"UpdateIndividualRatingParameter\",\"Init AgentFloatRegion TRUE\",\"ExtId12340\",\"3\",\" AgentFloatRegion init\",\"1\""
+        );
+    }
+
+    #[test]
+    fn test_crplmt_extract_msisdns_skips_title() {
+        let rows = vec![
+            vec!["Numeros".to_string()],
+            vec!["237653282055".to_string()],
+            vec!["237 681 178 408".to_string()],
+        ];
+
+        let msisdns = extract_msisdns(&rows).unwrap();
+        assert_eq!(msisdns, vec!["237653282055", "237681178408"]);
+    }
+
+    #[test]
+    fn test_crplmt_extract_msisdns_rejects_invalid_value() {
+        let rows = vec![
+            vec!["MSISDN".to_string()],
+            vec!["237653282055".to_string()],
+            vec!["abc".to_string()],
+        ];
+
+        assert!(extract_msisdns(&rows).is_err());
+    }
+
+    #[test]
+    fn test_crplmt_line_and_header() {
+        assert_eq!(
+            crplmt_line("237653282055", "100000"),
+            "MSISDN,\"237653282055\",\"CRPLMT_237653282055@100000\""
+        );
+
+        let lines = vec![
+            crplmt_line("237653282055", "100000"),
+            crplmt_line("237681178408", "100000"),
+        ];
+        let csv = build_csv(&lines, "Set", CRPLMT_PARAMETRE);
+        assert_eq!(
+            csv,
+            "HDR,UpdateIndividualRatingParameter,Set CRPLMT,ExtId12341,2,CRPLMT enable,1\n\
+             MSISDN,\"237653282055\",\"CRPLMT_237653282055@100000\"\n\
+             MSISDN,\"237681178408\",\"CRPLMT_237681178408@100000\"\n"
         );
     }
 }

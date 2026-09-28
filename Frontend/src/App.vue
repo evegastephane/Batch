@@ -10,7 +10,9 @@ import {
   TriangleAlert,
   RotateCcw,
   AlignLeft,
-  Rows3
+  Rows3,
+  Table2,
+  Phone
 } from 'lucide-vue-next'
 import EnTete from './components/EnTete.vue'
 import BarreLaterale from './components/BarreLaterale.vue'
@@ -25,6 +27,8 @@ const chargementHistorique = ref(false)
 const etat = ref('repos') // repos | survol | conversion | termine | erreur
 const fichier = ref(null)
 const styleEntete = ref('Init')
+const modeConversion = ref('standard') // standard | crplmt
+const montant = ref('100000')
 const nomZip = ref('')
 const tailleZipKo = ref(0)
 const nbFeuilles = ref(0)
@@ -38,6 +42,25 @@ const options = [
   { valeur: 'Init', label: 'Init', description: 'Initiation', icone: AlignLeft },
   { valeur: 'Set', label: 'Set', description: 'Modification', icone: Rows3 },
 ]
+
+const modes = [
+  {
+    valeur: 'standard',
+    label: 'Standard',
+    description: 'Classeur déjà au format MSISDN,…,Paramètre',
+    icone: Table2,
+    route: '/convert'
+  },
+  {
+    valeur: 'crplmt',
+    label: 'CRPLMT',
+    description: 'Colonne de numéros → MSISDN,"numéro","CRPLMT_numéro@montant"',
+    icone: Phone,
+    route: '/convert/crplmt'
+  },
+]
+
+const montantValide = computed(() => /^\d+$/.test(montant.value.trim()))
 
 const formatKo = (octets) => (octets / 1024).toFixed(0)
 const pourcentageRestant = computed(() => Math.max(0, 100 - progression.value))
@@ -127,6 +150,12 @@ async function traiterFichier(f) {
     return
   }
 
+  if (modeConversion.value === 'crplmt' && !montantValide.value) {
+    etat.value = 'erreur'
+    messageErreur.value = 'Le montant doit être un nombre entier (ex. 100000).'
+    return
+  }
+
   fichier.value = f
   etat.value = 'conversion'
   progression.value = 0
@@ -136,6 +165,7 @@ async function traiterFichier(f) {
     const formData = new FormData()
     formData.append('fichier', f)
     formData.append('style_entete', styleEntete.value)
+    if (modeConversion.value === 'crplmt') formData.append('montant', montant.value.trim())
 
     const reponse = await convertirAvecProgression(formData)
     const enteteContenu = reponse.headers['content-disposition'] || ''
@@ -161,7 +191,8 @@ async function traiterFichier(f) {
 function convertirAvecProgression(formData) {
   return new Promise((resolve, reject) => {
     const requete = new XMLHttpRequest()
-    requete.open('POST', `${API_BASE}/convert`)
+    const route = modes.find((m) => m.valeur === modeConversion.value)?.route || '/convert'
+    requete.open('POST', `${API_BASE}${route}`)
     requete.responseType = 'blob'
 
     let timerProgression = null
@@ -308,6 +339,44 @@ const libelleZone = computed(() => {
             Dépose un classeur Excel. Chaque feuille en ressort avec son propre titre généré
             et son propre fichier, regroupés dans un zip.
           </p>
+
+          <!-- Sélecteur du type de fichier d'entrée -->
+          <div v-if="etat === 'repos' || etat === 'survol'" class="mb-4">
+            <div class="flex items-center gap-1 border border-line rounded-md p-0.5 w-fit">
+              <button
+                v-for="mode in modes"
+                :key="mode.valeur"
+                type="button"
+                @click="modeConversion = mode.valeur"
+                :class="[
+                  'flex items-center gap-1.5 rounded px-3 py-1.5 text-xs font-medium transition-colors',
+                  modeConversion === mode.valeur
+                    ? 'bg-blue text-white'
+                    : 'text-ink-soft hover:text-ink'
+                ]"
+              >
+                <component :is="mode.icone" :size="13" :stroke-width="2.25" />
+                {{ mode.label }}
+              </button>
+            </div>
+            <p class="mt-2 font-mono text-[11px] text-ink-soft">
+              {{ modes.find(m => m.valeur === modeConversion)?.description }}
+            </p>
+
+            <label v-if="modeConversion === 'crplmt'" class="mt-3 flex items-center gap-2">
+              <span class="text-xs font-medium text-ink">Montant</span>
+              <input
+                v-model="montant"
+                type="text"
+                inputmode="numeric"
+                placeholder="100000"
+                :class="[
+                  'w-32 rounded-md border bg-paper px-2 py-1 font-mono text-xs text-ink outline-none focus:border-blue',
+                  montantValide ? 'border-line' : 'border-danger'
+                ]"
+              />
+            </label>
+          </div>
 
           <!-- Sélecteur du style d'en-tête -->
           <div v-if="etat === 'repos' || etat === 'survol'" class="mb-6">
