@@ -22,10 +22,13 @@ Routes principales :
 - `GET /historique/{id}/telecharger`
 - `DELETE /historique/{id}`
 
-Par defaut, les zips et la base SQLite sont crees a cote du binaire. Tu peux changer ces chemins avec :
+Par defaut, les zips et la base SQLite sont crees a cote du binaire s'il est accessible en ecriture,
+sinon dans `%LOCALAPPDATA%\MMC Batch`. Dans l'appli Tauri, ils sont dans `%APPDATA%\com.mmc.batch`
+(avec `backend.log`), et le port est 8000 s'il est libre, sinon un port libre. Variables disponibles :
 
 ```powershell
 $env:MMC_STORAGE_DIR = "C:\chemin\stockage"
 $env:MMC_DB_PATH = "C:\chemin\historique.db"
+$env:MMC_PORT = "8000"
 cargo run
 ```

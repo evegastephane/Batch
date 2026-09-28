@@ -1,5 +1,6 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { invoke, isTauri } from '@tauri-apps/api/core'
 import {
   FileSpreadsheet,
   UploadCloud,
@@ -18,7 +19,49 @@ import EnTete from './components/EnTete.vue'
 import BarreLaterale from './components/BarreLaterale.vue'
 import NotificationToast from './components/NotificationToast.vue'
 
-const API_BASE = 'http://127.0.0.1:8000'
+// Dans l'appli Tauri, le port est choisi au lancement du backend (8000 s'il est libre).
+let API_BASE = 'http://127.0.0.1:8000'
+
+async function lireEtatBackend() {
+  if (!isTauri()) return null
+  try {
+    return await invoke('etat_backend')
+  } catch {
+    return null
+  }
+}
+
+// Attend que le backend lancé par Tauri soit prêt (au plus ~10 s).
+async function attendreBackend() {
+  for (let essai = 0; essai < 40; essai++) {
+    const etatBackend = await lireEtatBackend()
+    if (!etatBackend) return
+    if (etatBackend.port) API_BASE = `http://127.0.0.1:${etatBackend.port}`
+    if (etatBackend.pret || etatBackend.erreur || etatBackend.code_sortie !== null) return
+    await new Promise((r) => setTimeout(r, 250))
+  }
+}
+
+// Explique pourquoi le backend ne répond pas, à partir de ce que Tauri a observé.
+async function diagnosticBackend() {
+  const etatBackend = await lireEtatBackend()
+  if (!etatBackend) return ''
+
+  const dernieresLignes = (etatBackend.journal || []).slice(-4).join('\n')
+  let cause
+  if (etatBackend.erreur) {
+    cause = `Le backend n'a pas pu être lancé : ${etatBackend.erreur}`
+  } else if (!etatBackend.en_marche) {
+    cause = `Le backend s'est arrêté (code ${etatBackend.code_sortie ?? '?'}).`
+  } else {
+    cause = `Le backend est lancé sur le port ${etatBackend.port} mais ne répond pas.`
+  }
+  return [
+    cause,
+    dernieresLignes && `Derniers messages :\n${dernieresLignes}`,
+    etatBackend.fichier_journal && `Journal complet : ${etatBackend.fichier_journal}`
+  ].filter(Boolean).join('\n\n')
+}
 
 const sidebarOuvert = ref(false)
 const historique = ref([])
@@ -117,7 +160,10 @@ async function supprimerDeHistorique(entree) {
   }
 }
 
-onMounted(chargerHistorique)
+onMounted(async () => {
+  await attendreBackend()
+  chargerHistorique()
+})
 
 function ouvrirSelecteur() {
   inputFichier.value?.click()
@@ -263,12 +309,13 @@ function convertirAvecProgression(formData) {
       resolve({ blob: requete.response, headers })
     }
 
-    requete.onerror = () => {
+    requete.onerror = async () => {
       termine = true
       clearInterval(timerProgression)
+      const diagnostic = await diagnosticBackend()
       reject(new Error(
-        'Impossible de joindre le backend (http://127.0.0.1:8000). ' +
-        'Ferme complètement l\'application puis relance-la.'
+        `Impossible de joindre le backend (${API_BASE}).` +
+        (diagnostic ? `\n\n${diagnostic}` : ' Ferme complètement l\'application puis relance-la.')
       ))
     }
 
@@ -528,13 +575,13 @@ const libelleZone = computed(() => {
 
           <!-- Erreur -->
           <div v-else-if="etat === 'erreur'" class="rounded-md border border-danger/30 bg-danger/5 px-6 py-6">
-            <div class="flex items-center gap-4 mb-5">
+            <div class="flex items-start gap-4 mb-5">
               <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded bg-danger/10 text-danger">
                 <TriangleAlert :size="20" :stroke-width="2" />
               </div>
               <div class="min-w-0">
                 <p class="text-sm font-medium text-ink">Échec de la conversion</p>
-                <p class="text-xs text-ink-soft">{{ messageErreur }}</p>
+                <p class="text-xs text-ink-soft whitespace-pre-line break-words select-text">{{ messageErreur }}</p>
               </div>
             </div>
             <button

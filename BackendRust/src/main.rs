@@ -48,10 +48,7 @@ struct HistoryQuery {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let base_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(Path::to_path_buf))
-        .unwrap_or(std::env::current_dir()?);
+    let base_dir = default_data_dir();
 
     let storage_dir = std::env::var_os("MMC_STORAGE_DIR")
         .map(PathBuf::from)
@@ -60,13 +57,21 @@ async fn main() -> Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| base_dir.join("historique.db"));
 
-    fs::create_dir_all(&storage_dir).await?;
+    fs::create_dir_all(&storage_dir).await.map_err(|e| {
+        anyhow!("Impossible de creer le dossier {} ({e})", storage_dir.display())
+    })?;
+    if let Some(parent) = db_path.parent() {
+        fs::create_dir_all(parent).await?;
+    }
+    println!("Donnees : {} et {}", storage_dir.display(), db_path.display());
 
     let state = Arc::new(AppState {
         storage_dir,
         db_path,
     });
-    init_db(&state.db_path)?;
+    init_db(&state.db_path).map_err(|e| {
+        anyhow!("Impossible d'ouvrir la base {} ({e})", state.db_path.display())
+    })?;
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -89,17 +94,44 @@ async fn main() -> Result<()> {
         .layer(cors)
         .with_state(state);
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 8000));
+    let port = std::env::var("MMC_PORT")
+        .ok()
+        .and_then(|p| p.trim().parse::<u16>().ok())
+        .unwrap_or(8000);
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
         anyhow!(
-            "Impossible d'ecouter sur {addr} ({e}). Un autre backend (ancienne version ?) \
-             utilise deja ce port : arrete le processus mmc-batch-backend puis relance."
+            "Impossible d'ecouter sur {addr} ({e}). Un autre programme utilise deja ce port \
+             (ancien backend ?) : arrete le processus mmc-batch-backend puis relance."
         )
     })?;
     println!("API Rust prete sur http://{addr}");
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+/// Dossier des donnees quand MMC_STORAGE_DIR / MMC_DB_PATH ne sont pas fournis :
+/// a cote du binaire si on peut y ecrire (cargo run), sinon dans le profil
+/// utilisateur (appli installee dans C:\Program Files, en lecture seule).
+fn default_data_dir() -> PathBuf {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf));
+
+    if let Some(dir) = exe_dir {
+        let probe = dir.join(".mmc-ecriture-test");
+        if std::fs::write(&probe, b"ok").is_ok() {
+            let _ = std::fs::remove_file(&probe);
+            return dir;
+        }
+    }
+
+    std::env::var_os("LOCALAPPDATA")
+        .or_else(|| std::env::var_os("APPDATA"))
+        .or_else(|| std::env::var_os("HOME"))
+        .map(|home| PathBuf::from(home).join("MMC Batch"))
+        .unwrap_or_else(|| std::env::temp_dir().join("MMC Batch"))
 }
 
 async fn root() -> Json<serde_json::Value> {
