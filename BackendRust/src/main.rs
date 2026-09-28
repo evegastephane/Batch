@@ -108,6 +108,8 @@ struct ConvertForm {
     bytes: Vec<u8>,
     style_entete: String,
     montant: Option<String>,
+    titre: Option<String>,
+    description: Option<String>,
 }
 
 async fn read_convert_form(mut multipart: Multipart) -> Result<ConvertForm, AppError> {
@@ -115,6 +117,8 @@ async fn read_convert_form(mut multipart: Multipart) -> Result<ConvertForm, AppE
     let mut file_bytes: Option<Vec<u8>> = None;
     let mut style_entete = String::from("Init");
     let mut montant: Option<String> = None;
+    let mut titre: Option<String> = None;
+    let mut description: Option<String> = None;
 
     while let Some(field) = multipart.next_field().await? {
         let name = field.name().unwrap_or("").to_string();
@@ -128,6 +132,12 @@ async fn read_convert_form(mut multipart: Multipart) -> Result<ConvertForm, AppE
             }
             "montant" => {
                 montant = field.text().await.ok();
+            }
+            "titre" => {
+                titre = field.text().await.ok();
+            }
+            "description" => {
+                description = field.text().await.ok();
             }
             _ => {}
         }
@@ -151,6 +161,8 @@ async fn read_convert_form(mut multipart: Multipart) -> Result<ConvertForm, AppE
         bytes,
         style_entete,
         montant,
+        titre,
+        description,
     })
 }
 
@@ -168,34 +180,46 @@ async fn convert(
     zip_and_respond(&state, &form, &csvs, zip_name, nb_feuilles).await
 }
 
-/// Nouveau chemin : une colonne de MSISDN (avec un titre) devient d'abord
-/// `MSISDN,"<numero>","CRPLMT_<numero>@<montant>"`, puis passe dans le
-/// process habituel (entete HDR Init/Set) avec le parametre CRPLMT.
+/// Chemin CRPLMT (AddAlias) : une colonne de MSISDN (avec un titre) devient
+/// un fichier texte pret a l'import :
+/// `HDR,"AddAlias","<titre>","ExtId12340","<nb>","<description>","1"`
+/// suivi d'une ligne `MSISDN,"<numero>","CRPLMT_<numero>@<montant>"` par numero.
 async fn convert_crplmt(
     State(state): State<Arc<AppState>>,
     multipart: Multipart,
 ) -> Result<Response, AppError> {
     let form = read_convert_form(multipart).await?;
 
-    let montant = form
-        .montant
-        .as_deref()
-        .map(str::trim)
-        .unwrap_or(CRPLMT_MONTANT_DEFAUT)
-        .to_string();
+    let montant = form_value(&form.montant, CRPLMT_MONTANT_DEFAUT);
     if montant.is_empty() || !montant.chars().all(|c| c.is_ascii_digit()) {
         return Err(AppError::bad_request(
             "Le montant doit etre un nombre entier (ex. 100000).",
         ));
     }
+    let titre = form_value(&form.titre, ADD_ALIAS_TITRE_DEFAUT);
+    let description = form_value(&form.description, ADD_ALIAS_DESCRIPTION_DEFAUT);
+    if titre.contains('"') || description.contains('"') {
+        return Err(AppError::bad_request(
+            "Le titre et la description ne doivent pas contenir de guillemets.",
+        ));
+    }
 
-    let files = excel_to_crplmt_csvs(&form.bytes, &form.style_entete, &montant)
+    let base_name = strip_extension(&form.file_name);
+    let files = excel_to_add_alias_files(&form.bytes, base_name, &montant, &titre, &description)
         .map_err(|e| AppError::bad_request(format!("Fichier Excel invalide: {e}")))?;
-    let zip_name = format!("{}_crplmt_csv.zip", strip_extension(&form.file_name));
-    // Chaque feuille produit un fichier final + un fichier intermediaire.
-    let nb_feuilles = files.len() / 2;
+    let zip_name = format!("{base_name}_AddAlias.zip");
+    let nb_feuilles = files.len();
 
     zip_and_respond(&state, &form, &files, zip_name, nb_feuilles).await
+}
+
+/// Valeur d'un champ texte du formulaire, ou la valeur par defaut s'il est absent/vide.
+/// Les espaces internes sont conserves tels quels.
+fn form_value(value: &Option<String>, default: &str) -> String {
+    match value.as_deref() {
+        Some(v) if !v.trim().is_empty() => v.trim_matches(['\r', '\n']).to_string(),
+        _ => default.to_string(),
+    }
 }
 
 async fn zip_and_respond(
@@ -287,8 +311,10 @@ async fn delete_history_entry(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
-const CRPLMT_PARAMETRE: &str = "CRPLMT";
+const CRPLMT_PREFIXE: &str = "CRPLMT";
 const CRPLMT_MONTANT_DEFAUT: &str = "100000";
+const ADD_ALIAS_TITRE_DEFAUT: &str = "Add Alias Title";
+const ADD_ALIAS_DESCRIPTION_DEFAUT: &str = "Agent  advance pilote";
 
 fn read_sheets(bytes: &[u8]) -> Result<Vec<(String, Vec<Vec<String>>)>> {
     let cursor = Cursor::new(bytes.to_vec());
@@ -326,40 +352,54 @@ fn excel_to_csvs(bytes: &[u8], style_entete: &str) -> Result<Vec<(String, Vec<u8
     Ok(result)
 }
 
-/// Pour chaque feuille, renvoie le CSV final (entete HDR + lignes CRPLMT)
-/// suivi du CSV intermediaire (lignes CRPLMT seules).
-fn excel_to_crplmt_csvs(
+/// Un fichier .txt AddAlias par feuille contenant des numeros
+/// (fins de ligne Windows, sans BOM, comme le template d'import).
+fn excel_to_add_alias_files(
     bytes: &[u8],
-    style_entete: &str,
+    base_name: &str,
     montant: &str,
+    titre: &str,
+    description: &str,
 ) -> Result<Vec<(String, Vec<u8>)>> {
-    let mut result = Vec::new();
+    let mut sheets = Vec::new();
 
     for (sheet_name, rows) in read_sheets(bytes)? {
         let msisdns = extract_msisdns(&rows)
             .map_err(|e| anyhow!("feuille \"{sheet_name}\" : {e}"))?;
-        if msisdns.is_empty() {
-            continue;
+        if !msisdns.is_empty() {
+            sheets.push((sheet_name, msisdns));
         }
-
-        let lines: Vec<String> = msisdns
-            .iter()
-            .map(|msisdn| crplmt_line(msisdn, montant))
-            .collect();
-
-        let mut intermediate = lines.join("\n");
-        intermediate.push('\n');
-        let csv = build_csv(&lines, style_entete, CRPLMT_PARAMETRE);
-
-        result.push((csv_file_name(&sheet_name, ""), with_bom(&csv)));
-        result.push((csv_file_name(&sheet_name, "_intermediaire"), with_bom(&intermediate)));
     }
 
-    if result.is_empty() {
+    if sheets.is_empty() {
         return Err(anyhow!("Aucun numero trouve dans le fichier."));
     }
 
-    Ok(result)
+    let single = sheets.len() == 1;
+    Ok(sheets
+        .into_iter()
+        .map(|(sheet_name, msisdns)| {
+            let name = if single {
+                format!("{base_name}.txt")
+            } else {
+                format!("{base_name}_{}.txt", sheet_name.replace(['/', '\\'], "-"))
+            };
+            let content = build_add_alias(&msisdns, montant, titre, description);
+            (name, content.into_bytes())
+        })
+        .collect())
+}
+
+fn build_add_alias(msisdns: &[String], montant: &str, titre: &str, description: &str) -> String {
+    let mut out = format!(
+        "HDR,\"AddAlias\",\"{titre}\",\"ExtId12340\",\"{}\",\"{description}\",\"1\"\r\n",
+        msisdns.len()
+    );
+    for msisdn in msisdns {
+        out.push_str(&crplmt_line(msisdn, montant));
+        out.push_str("\r\n");
+    }
+    out
 }
 
 /// Lit la premiere cellule non vide de chaque ligne. Une premiere ligne
@@ -389,7 +429,7 @@ fn extract_msisdns(rows: &[Vec<String>]) -> Result<Vec<String>> {
 }
 
 fn crplmt_line(msisdn: &str, montant: &str) -> String {
-    format!("MSISDN,\"{msisdn}\",\"{CRPLMT_PARAMETRE}_{msisdn}@{montant}\"")
+    format!("MSISDN,\"{msisdn}\",\"{CRPLMT_PREFIXE}_{msisdn}@{montant}\"")
 }
 
 fn build_csv(lines: &[String], style_entete: &str, parameter_name: &str) -> String {
@@ -731,22 +771,19 @@ mod tests {
     }
 
     #[test]
-    fn test_crplmt_line_and_header() {
-        assert_eq!(
-            crplmt_line("237653282055", "100000"),
-            "MSISDN,\"237653282055\",\"CRPLMT_237653282055@100000\""
+    fn test_add_alias_matches_template() {
+        let msisdns = vec!["237653282055".to_string(), "237679447586".to_string()];
+        let out = build_add_alias(
+            &msisdns,
+            CRPLMT_MONTANT_DEFAUT,
+            ADD_ALIAS_TITRE_DEFAUT,
+            ADD_ALIAS_DESCRIPTION_DEFAUT,
         );
-
-        let lines = vec![
-            crplmt_line("237653282055", "100000"),
-            crplmt_line("237681178408", "100000"),
-        ];
-        let csv = build_csv(&lines, "Set", CRPLMT_PARAMETRE);
         assert_eq!(
-            csv,
-            "HDR,UpdateIndividualRatingParameter,Set CRPLMT,ExtId12341,2,CRPLMT enable,1\n\
-             MSISDN,\"237653282055\",\"CRPLMT_237653282055@100000\"\n\
-             MSISDN,\"237681178408\",\"CRPLMT_237681178408@100000\"\n"
+            out,
+            "HDR,\"AddAlias\",\"Add Alias Title\",\"ExtId12340\",\"2\",\"Agent  advance pilote\",\"1\"\r\n\
+             MSISDN,\"237653282055\",\"CRPLMT_237653282055@100000\"\r\n\
+             MSISDN,\"237679447586\",\"CRPLMT_237679447586@100000\"\r\n"
         );
     }
 }
