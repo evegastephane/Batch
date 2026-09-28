@@ -29,6 +29,8 @@ const fichier = ref(null)
 const styleEntete = ref('Init')
 const modeConversion = ref('standard') // standard | crplmt
 const montant = ref('100000')
+const titreAlias = ref('Add Alias Title')
+const descriptionAlias = ref('Agent  advance pilote')
 const nomZip = ref('')
 const tailleZipKo = ref(0)
 const nbFeuilles = ref(0)
@@ -54,7 +56,7 @@ const modes = [
   {
     valeur: 'crplmt',
     label: 'CRPLMT',
-    description: 'Colonne de numéros → MSISDN,"numéro","CRPLMT_numéro@montant"',
+    description: 'Colonne de numéros → fichier AddAlias .txt (MSISDN,"numéro","CRPLMT_numéro@montant")',
     icone: Phone,
     route: '/convert/crplmt'
   },
@@ -165,7 +167,11 @@ async function traiterFichier(f) {
     const formData = new FormData()
     formData.append('fichier', f)
     formData.append('style_entete', styleEntete.value)
-    if (modeConversion.value === 'crplmt') formData.append('montant', montant.value.trim())
+    if (modeConversion.value === 'crplmt') {
+      formData.append('montant', montant.value.trim())
+      formData.append('titre', titreAlias.value)
+      formData.append('description', descriptionAlias.value)
+    }
 
     const reponse = await convertirAvecProgression(formData)
     const enteteContenu = reponse.headers['content-disposition'] || ''
@@ -341,7 +347,7 @@ const libelleZone = computed(() => {
           </p>
 
           <!-- Sélecteur du type de fichier d'entrée -->
-          <div v-if="etat === 'repos' || etat === 'survol'" class="mb-4">
+          <div v-if="etat === 'repos' || etat === 'survol'" :class="modeConversion === 'crplmt' ? 'mb-6' : 'mb-4'">
             <div class="flex items-center gap-1 border border-line rounded-md p-0.5 w-fit">
               <button
                 v-for="mode in modes"
@@ -363,9 +369,10 @@ const libelleZone = computed(() => {
               {{ modes.find(m => m.valeur === modeConversion)?.description }}
             </p>
 
-            <label v-if="modeConversion === 'crplmt'" class="mt-3 flex items-center gap-2">
-              <span class="text-xs font-medium text-ink">Montant</span>
+            <div v-if="modeConversion === 'crplmt'" class="mt-3 grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-2 max-w-sm">
+              <label for="champ-montant" class="text-xs font-medium text-ink">Montant</label>
               <input
+                id="champ-montant"
                 v-model="montant"
                 type="text"
                 inputmode="numeric"
@@ -375,11 +382,25 @@ const libelleZone = computed(() => {
                   montantValide ? 'border-line' : 'border-danger'
                 ]"
               />
-            </label>
+              <label for="champ-titre" class="text-xs font-medium text-ink">Titre</label>
+              <input
+                id="champ-titre"
+                v-model="titreAlias"
+                type="text"
+                class="rounded-md border border-line bg-paper px-2 py-1 font-mono text-xs text-ink outline-none focus:border-blue"
+              />
+              <label for="champ-description" class="text-xs font-medium text-ink">Description</label>
+              <input
+                id="champ-description"
+                v-model="descriptionAlias"
+                type="text"
+                class="rounded-md border border-line bg-paper px-2 py-1 font-mono text-xs text-ink outline-none focus:border-blue"
+              />
+            </div>
           </div>
 
-          <!-- Sélecteur du style d'en-tête -->
-          <div v-if="etat === 'repos' || etat === 'survol'" class="mb-6">
+          <!-- Sélecteur du style d'en-tête (process standard uniquement) -->
+          <div v-if="(etat === 'repos' || etat === 'survol') && modeConversion === 'standard'" class="mb-6">
             <div class="flex items-center gap-1 border border-line rounded-md p-0.5 w-fit">
               <button
                 v-for="opt in options"
