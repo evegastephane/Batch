@@ -90,7 +90,12 @@ async fn main() -> Result<()> {
         .with_state(state);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 8000));
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
+        anyhow!(
+            "Impossible d'ecouter sur {addr} ({e}). Un autre backend (ancienne version ?) \
+             utilise deja ce port : arrete le processus mmc-batch-backend puis relance."
+        )
+    })?;
     println!("API Rust prete sur http://{addr}");
     axum::serve(listener, app).await?;
 

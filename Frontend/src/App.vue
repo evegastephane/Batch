@@ -247,6 +247,13 @@ function convertirAvecProgression(formData) {
       if (requete.status < 200 || requete.status >= 300) {
         termine = true
         clearInterval(timerProgression)
+        if (requete.status === 404) {
+          reject(new Error(
+            'Le backend lancé est une ancienne version (route inconnue). ' +
+            'Ferme l\'application, relance .\\copy-sidecar.ps1 puis redémarre.'
+          ))
+          return
+        }
         const detail = await lireErreurBlob(requete.response)
         reject(new Error(detail || `Erreur serveur (${requete.status})`))
         return
@@ -259,7 +266,10 @@ function convertirAvecProgression(formData) {
     requete.onerror = () => {
       termine = true
       clearInterval(timerProgression)
-      reject(new Error('Impossible de joindre le backend.'))
+      reject(new Error(
+        'Impossible de joindre le backend (http://127.0.0.1:8000). ' +
+        'Ferme complètement l\'application puis relance-la.'
+      ))
     }
 
     requete.onabort = () => {
